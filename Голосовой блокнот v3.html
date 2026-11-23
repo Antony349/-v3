@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Голосовой блокнот</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;max-width:920px;margin:0 auto;padding:12px;color:#222}
+h1{font-size:20px;margin:4px 0 10px}
+.row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:8px}
+.row label{font-size:14px}
+button{padding:6px 10px;border:1px solid #bbb;border-radius:6px;background:#f4f4f4;cursor:pointer;font-size:14px}
+button:hover{background:#e6e6e6}
+button:active{background:#dcdcdc}
+#recBtn{padding:8px 16px;font-weight:bold}
+#recBtn.recording{background:#d9534f;color:#fff;border-color:#d9534f}
+.pbtn{min-width:36px}
+#level{vertical-align:middle;background:#eee;border-radius:4px}
+#qual{font-size:13px;color:#666}
+#preview{width:100%;box-sizing:border-box;background:#fafafa;color:#555;font-size:14px}
+#result{width:100%;min-height:260px;border:1px solid #999;border-radius:6px;padding:8px;box-sizing:border-box;white-space:pre-wrap;overflow-wrap:break-word;font-size:15px;background:#fff}
+#result:focus{outline:2px solid #7aa7ff}
+.lowconf{background:#ffe9a8}
+#status{color:#555;min-height:18px;margin:6px 0;font-size:13px}
+#whisperPanel{border:1px solid #ccc;border-radius:8px;padding:10px;margin-top:16px;background:#fbfbfb}
+#whisperPanel h3{margin:0 0 6px;font-size:16px}
+#whisperPanel .hint{font-size:13px;color:#666;margin:4px 0}
+.note{font-size:12px;color:#777;margin-top:6px}
+kbd{background:#eee;border:1px solid #ccc;border-radius:3px;padding:0 4px;font-size:12px}
+footer{margin-top:18px;font-size:13px;color:#666;line-height:1.6}
+fieldset{border:1px solid #ddd;border-radius:8px;margin:10px 0}
+legend{font-weight:bold;font-size:14px}
+</style>
+</head>
+<body>
+<h1>Голосовой блокнот</h1>
+
+<div class="row">
+  <label>Язык:
+    <select id="lang">
+      <option value="ru-RU">русский</option>
+      <option value="en-US">английский</option>
+      <option value="uk-UA">украинский</option>
+      <option value="de-DE">немецкий</option>
+      <option value="fr-FR">французский</option>
+      <option value="es-ES">испанский</option>
+      <option value="it-IT">итальянский</option>
+      <option value="kk-KZ">казахский</option>
+      <option value="uz-UZ">узбекский</option>
+      <option value="hy-AM">армянский</option>
+      <option value="az-AZ">азербайджанский</option>
+      <option value="ka-GE">грузинский</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="chkPunct" checked> Заменять слова пунктуации</label>
+  <label><input type="checkbox" id="chkConf" checked> Подсвечивать неуверенные слова</label>
+</div>
+
+<div class="recbar">
+  <button id="recBtn" onclick="toggleRecord()">● Включить запись</button>
+  <canvas id="level" width="120" height="34"></canvas>
+  <span id="qual"></span>
+</div>
+
+<fieldset><legend>Кнопки пунктуации и правки</legend>
+  <div id="punctRow" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px">
+    <button onclick="addCap()">Aa</button>
+    <button onclick="backspace()">←</button>
+    <button onclick="undo()">Отменить</button>
+    <button onclick="cutSel()">Вырезать</button>
+    <button onclick="copyAll()">Скопировать</button>
+    <button onclick="correctText()" style="background:#e8f4e8;font-weight:bold">Исправить ошибки</button>
+    <button onclick="downloadTxt()">Скачать .txt</button>
+    <button onclick="clearAll()">Очистить</button>
+  </div>
+</fieldset>
+
+<label class="row" style="font-size:13px;color:#555">Поле предварительного показа</label>
+<textarea id="preview" readonly rows="3" spellcheck="false"></textarea>
+
+<label class="row" style="font-size:13px;color:#555">Результирующее поле</label>
+<div id="result" contenteditable="true" spellcheck="true"></div>
+
+<div id="status"></div>
+
+<section id="whisperPanel">
+  <h3>Расшифровка аудио- и видеофайлов (Whisper)</h3>
+  <div class="hint" id="wHint">Для работы нужен локальный сервер: запустите <b>python server.py</b> и откройте блокнот по адресу http://localhost:8000</div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <input type="file" id="audioFile" accept="audio/*,video/*">
+    <button onclick="transcribeFile()">Расшифровать файл</button>
+  </div>
+  <div id="wStatus" style="font-size:13px;color:#555;margin-top:4px"></div>
+</section>
+
+<footer>
+  <b>Горячие клавиши</b> (с зажатыми Ctrl и Alt): <kbd>Пробел</kbd> — вкл/выкл запись,
+  <kbd>Z</kbd> — отменить, <kbd>X</kbd> — вырезать в буфер,
+  <kbd>1</kbd>–<kbd>6</kbd> — точка, запятая, ?, !, тире, новая строка.<br>
+  Голосом: «точка», «запятая», «вопросительный знак», «восклицательный знак», «тире», «двоеточие», «новая строка», «абзац».
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const resultEl = $('result'), previewEl = $('preview'), statusEl = $('status'), langSel = $('lang');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false, wantListen = false, quoteOpen = false;
+const undoStack = [];
+
+const RU_PUNCT = {'точка':'.','запятая':',','вопросительный знак':'?','восклицательный знак':'!','тире':' — ','дефис':'-','двоеточие':':','точка с запятой':';','новая строка':'\n','с новой строки':'\n','абзац':'\n\n'};
+const EN_PUNCT = {'period':'.','comma':',','question mark':'?','exclamation mark':'!','dash':' — ','new line':'\n','new paragraph':'\n\n'};
+
+function status(msg){ statusEl.textContent = msg; }
+function pushUndo(){ undoStack.push(resultEl.innerHTML); if(undoStack.length > 200) undoStack.shift(); }
+function saveDraft(){ try{ localStorage.setItem('notepadDraft', resultEl.innerText); localStorage.setItem('notepadLang', langSel.value); }catch(e){} }
+function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function applyVoicePunct(s){
+  const map = langSel.value.indexOf('ru') === 0 ? RU_PUNCT : EN_PUNCT;
+  for(const word in map){
+    const re = new RegExp('(^|[\\s(«"„])' + escapeRe(word) + '(?=$|[\\s).,!?»":;—-])', 'gi');
+    s = s.replace(re, function(m, p){ return p + map[word]; });
+  }
+  return s;
+}
+
+function insertFinal(text, conf){
+  if(!text) return;
+  pushUndo();
+  const prev = resultEl.innerText;
+  const capNeeded = !prev.trim() || /[.!?]\s*$|\n\s*$/.test(prev);
+  if(capNeeded && /^[a-zа-яё]/.test(text)) text = text[0].toUpperCase() + text.slice(1);
+  const sel = window.getSelection();
+  let range;
+  if(sel.rangeCount && resultEl.contains(sel.anchorNode) && !sel.isCollapsed){
+    range = sel.getRangeAt(0); range.deleteContents();
+  } else {
+    range = document.createRange(); range.selectNodeContents(resultEl); range.collapse(false);
+  }
+  let node;
+  if(conf !== undefined && conf < 0.6 && $('chkConf').checked){
+    node = document.createElement('span'); node.className = 'lowconf';
+  } else {
+    node = document.createTextNode('');
+  }
+  node.textContent = text;
+  range.insertNode(node);
+  range.setStartAfter(node); range.collapse(true);
+  sel.removeAllRanges(); sel.addRange(range);
+  saveDraft();
+}
+
+function initRec(){
+  if(!SR){ status('Ваш браузер не поддерживает распознавание речи. Нужен Chrome.'); return false; }
+  rec = new SR();
+  rec.lang = langSel.value;
+  rec.continuous = true; rec.interimResults = true;
+  rec.onresult = function(e){
+    let interim = '';
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const r = e.results[i];
+      if(r.isFinal){
+        let text = r[0].transcript.trim();
+        const conf = r[0].confidence;
+        if($('chkPunct').checked) text = applyVoicePunct(text);
+        insertFinal(text, conf);
+      } else interim += r[0].transcript;
+    }
+    previewEl.value = interim;
+  };
+  rec.onerror = function(e){
+    if(e.error === 'not-allowed') status('Нет доступа к микрофону — разрешите его в браузере.');
+    else if(e.error === 'network') status('Ошибка сети распознавания, перезапускаю…');
+  };
+  rec.onend = function(){
+    if(wantListen){ try{ rec.start(); }catch(e){} }
+    else status('Запись остановлена');
+  };
+  return true;
+}
+
+function toggleRecord(){
+  if(!SR){ status('Ваш браузер не поддерживает распознавание речи. Нужен Chrome.'); return; }
+  if(!listening){
+    if(!rec && !initRec()) return;
+    rec.lang = langSel.value;
+    wantListen = true; listening = true;
+    try{ rec.start(); }catch(e){}
+    $('recBtn').classList.add('recording');
+    $('recBtn').textContent = '■ Остановить запись';
+    status('Слушаю…');
+    startLevel();
+  } else {
+    wantListen = false; listening = false;
+    rec.stop();
+    $('recBtn').classList.remove('recording');
+    $('recBtn').textContent = '● Включить запись';
+    stopLevel();
+  }
+}
+
+let audioCtx = null, analyser = null, micStream = null, levelRAF = null;
+async function startLevel(){
+  try{
+    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
+    src.connect(analyser);
+    drawLevel();
+  }catch(e){ status('Не удалось получить уровень звука: ' + e.message); }
+}
+function stopLevel(){
+  if(levelRAF) cancelAnimationFrame(levelRAF);
+  levelRAF = null;
+  if(micStream) micStream.getTracks().forEach(function(t){ t.stop(); });
+  micStream = null;
+  if(audioCtx){ try{ audioCtx.close(); }catch(e){} audioCtx = null; }
+  analyser = null;
+  drawLevelIdle();
+}
+function drawLevel(){
+  const c = $('level'), ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  if(analyser){
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for(let i = 0; i < data.length; i++){ const v = (data[i] - 128) / 128; sum += v * v; }
+    const rms = Math.sqrt(sum / data.length);
+    const bars = 12;
+    for(let i = 0; i < bars; i++){
+      const h = Math.min(c.height - 2, rms * 220 * (i + 1) / bars);
+      const x = 4 + i * (c.width - 8) / bars;
+      ctx.fillStyle = rms > 0.5 ? '#d9534f' : (h > 2 ? '#5cb85c' : '#ccc');
+      ctx.fillRect(x, c.height - 2 - h, (c.width - 8) / bars - 2, h);
+    }
+    $('qual').textContent = rms > 0.5 ? 'Слишком громко' : (rms > 0.02 ? 'Норма' : 'Тихо');
+  }
+  levelRAF = requestAnimationFrame(drawLevel);
+}
+function drawLevelIdle(){
+  const c = $('level'), ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  $('qual').textContent = '';
+}
+
+const PUNCT = [
+  ['⏎', '\n', 'Новая строка'], ['«»', '"', 'Кавычки (чередуются)'], [' — ', ' — ', 'Тире'],
+  ['-', '-', 'Дефис'], [':', ':', 'Двоеточие'], [';', ';', 'Точка с запятой'],
+  ['*', '*', 'Звёздочка'], ['(', '(', 'Открыть скобку'], [')', ')', 'Закрыть скобку'],
+  ['!', '!', 'Восклицательный знак'], ['?', '?', 'Вопросительный знак'],
+  [',', ',', 'Запятая'], ['.', '.', 'Точка'], ['␣', ' ', 'Пробел']
+];
+(function buildPunct(){
+  const row = $('punctRow');
+  PUNCT.forEach(function(p){
+    const b = document.createElement('button');
+    b.className = 'pbtn'; b.textContent = p[0]; b.title = p[2];
+    b.onclick = function(){ insertPunct(p[1]); };
+    row.appendChild(b);
+  });
+})();
+
+function insertPunct(sign){
+  if(sign === '"'){ sign = quoteOpen ? '»' : '«'; quoteOpen = !quoteOpen; }
+  insertFinal(sign, 1);
+  resultEl.focus();
+}
+
+function lastTextNode(n){
+  if(n.nodeType === 3) return n;
+  for(let i = n.childNodes.length - 1; i >= 0; i--){
+    const r = lastTextNode(n.childNodes[i]);
+    if(r) return r;
+  }
+  return null;
+}
+
+function addCap(){
+  pushUndo();
+  const sel = window.getSelection();
+  if(!sel.rangeCount || !resultEl.contains(sel.anchorNode)){ status('Поставьте курсор в текст'); return; }
+  const range = sel.getRangeAt(0);
+  let node = range.startContainer, off = range.startOffset;
+  if(node.nodeType !== 3){
+    const prev = range.startContainer.childNodes[range.startOffset - 1];
+    node = prev ? lastTextNode(prev) : null;
+    off = node ? node.textContent.length : 0;
+    if(!node){ status('Курсор не в тексте'); return; }
+  }
+  const text = node.textContent;
+  let i = off - 1;
+  while(i >= 0 && /[\s.,!?;:—«»"'()]/.test(text[i])) i--;
+  if(i < 0){ status('Перед курсором нет слова'); return; }
+  while(i >= 0 && !/\s/.test(text[i])) i--;
+  const start = i + 1;
+  const ch = text[start];
+  const swapped = ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase();
+  node.textContent = text.slice(0, start) + swapped + text.slice(start + 1);
+}
+
+function backspace(){
+  pushUndo();
+  const t = resultEl.innerText;
+  if(!t){ status('Текст пуст'); return; }
+  resultEl.textContent = t.slice(0, -1);
+  saveDraft();
+}
+
+function undo(){
+  if(!undoStack.length){ status('Отменять нечего'); return; }
+  resultEl.innerHTML = undoStack.pop();
+  saveDraft();
+  status('Отменено');
+}
+
+function copyToClipboard(text){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).catch(function(){ fallbackCopy(text); });
+  } else fallbackCopy(text);
+}
+function fallbackCopy(text){
+  const ta = document.createElement('textarea');
+  ta.value = text; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); }catch(e){}
+  document.body.removeChild(ta);
+}
+
+function copyAll(){ copyToClipboard(resultEl.innerText); status('Текст скопирован'); }
+
+function cutSel(){
+  pushUndo();
+  const sel = window.getSelection();
+  if(sel.rangeCount && resultEl.contains(sel.anchorNode) && !sel.isCollapsed){
+    const txt = sel.toString();
+    sel.getRangeAt(0).deleteContents();
+    copyToClipboard(txt);
+    status('Вырезано: ' + txt.length + ' симв.');
+  } else {
+    const txt = resultEl.innerText;
+    copyToClipboard(txt);
+    resultEl.textContent = '';
+    status('Весь текст вырезан в буфер');
+  }
+  saveDraft();
+}
+
+function clearAll(){
+  pushUndo();
+  resultEl.textContent = '';
+  previewEl.value = '';
+  saveDraft();
+  status('Поле очищено (можно вернуть кнопкой «Отменить»)');
+}
+
+function downloadTxt(){
+  const text = resultEl.innerText;
+  if(!text.trim()){ status('Текст пуст'); return; }
+  const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'заметка.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function splitChunks(s, n){
+  const out = []; let rest = s;
+  while(rest.length > n){
+    let cut = rest.lastIndexOf('.', n);
+    if(cut < n / 2) cut = rest.lastIndexOf(' ', n);
+    if(cut <= 0) cut = n;
+    out.push(rest.slice(0, cut + 1));
+    rest = rest.slice(cut + 1);
+  }
+  if(rest) out.push(rest);
+  return out;
+}
+
+async function correctText(){
+  const text = resultEl.innerText;
+  if(!text.trim()){ status('Текст пуст'); return; }
+  const lang = langSel.value.indexOf('ru') === 0 ? 'ru-RU' : 'en-US';
+  status('Проверяю текст…');
+  try{
+    const chunks = splitChunks(text, 18000);
+    const corrected = [];
+    let fixed = 0;
+    for(const chunk of chunks){
+      const resp = await fetch('https://api.languagetool.org/v2/check', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: new URLSearchParams({text: chunk, language: lang})
+      });
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      let s = chunk;
+      const matches = data.matches.slice().sort(function(a, b){ return b.offset - a.offset; });
+      for(const m of matches){
+        const repl = m.replacements && m.replacements.length ? m.replacements[0].value : null;
+        if(repl !== null){
+          s = s.slice(0, m.offset) + repl + s.slice(m.offset + m.length);
+          fixed++;
+        }
+      }
+      corrected.push(s);
+    }
+    pushUndo();
+    resultEl.textContent = corrected.join('');
+    saveDraft();
+    status('Исправлено ошибок: ' + fixed);
+  }catch(e){
+    status('Ошибка проверки: ' + e.message);
+  }
+}
+
+async function transcribeFile(){
+  const input = $('audioFile');
+  if(!input.files.length){ $('wStatus').textContent = 'Сначала выберите файл'; return; }
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  $('wStatus').textContent = 'Расшифровываю… файл обрабатывается на вашем компьютере';
+  try{
+    const resp = await fetch('/transcribe', {method: 'POST', body: fd});
+    if(!resp.ok) throw new Error('сервер вернул ошибку ' + resp.status);
+    const data = await resp.json();
+    if(data.error) throw new Error(data.error);
+    const text = (data.text || '').trim();
+    if(text){
+      const sep = resultEl.innerText.trim() ? '\n\n' : '';
+      insertFinal(sep + text, 1);
+      $('wStatus').textContent = 'Готово: получено ' + text.length + ' символов';
+    } else {
+      $('wStatus').textContent = 'Готово, но речь в файле не найдена (0 символов)';
+    }
+  }catch(e){
+    $('wStatus').textContent = 'Ошибка: ' + e.message;
+  }
+}
+
+document.addEventListener('keydown', function(e){
+  if(e.ctrlKey && e.altKey){
+    if(e.code === 'Space'){ e.preventDefault(); toggleRecord(); }
+    else if(e.code === 'KeyZ'){ e.preventDefault(); undo(); }
+    else if(e.code === 'KeyX'){ e.preventDefault(); cutSel(); }
+    else if(e.key >= '1' && e.key <= '6'){
+      e.preventDefault();
+      insertFinal(['.', ',', '?', '!', ' — ', '\n'][+e.key - 1], 1);
+    }
+  }
+});
+
+langSel.addEventListener('change', function(){
+  if(rec) rec.lang = langSel.value;
+  if(listening) rec.stop();
+  saveDraft();
+});
+resultEl.addEventListener('input', saveDraft);
+
+try{
+  const d = localStorage.getItem('notepadDraft');
+  if(d) resultEl.textContent = d;
+  const l = localStorage.getItem('notepadLang');
+  if(l) langSel.value = l;
+}catch(e){}
+
+if(location.protocol === 'file:'){
+  $('whisperPanel').innerHTML = '<h3>Расшифровка аудио- и видеофайлов (Whisper)</h3>' +
+    '<div class="hint">Панель доступна при запуске блокнота с локального сервера: запустите <b>python server.py</b> и откройте блокнот по адресу http://localhost:8000</div>';
+}
+</script>
+</body>
+</html>
