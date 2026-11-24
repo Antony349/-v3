@@ -22,7 +22,6 @@ button:active{background:#dcdcdc}
 #result:focus{outline:2px solid #7aa7ff}
 .lowconf{background:#ffe9a8}
 #status{color:#555;min-height:18px;margin:6px 0;font-size:13px}
-#stats{font-size:13px;color:#666;margin:0 0 6px}
 #whisperPanel{border:1px solid #ccc;border-radius:8px;padding:10px;margin-top:16px;background:#fbfbfb}
 #whisperPanel h3{margin:0 0 6px;font-size:16px}
 #whisperPanel .hint{font-size:13px;color:#666;margin:4px 0}
@@ -55,6 +54,7 @@ legend{font-weight:bold;font-size:14px}
   </label>
   <label><input type="checkbox" id="chkPunct" checked> Заменять слова пунктуации</label>
   <label><input type="checkbox" id="chkConf" checked> Подсвечивать неуверенные слова</label>
+  <label><input type="checkbox" id="chkLower" checked> Убирать заглавную в середине предложения</label>
 </div>
 
 <div class="recbar">
@@ -68,13 +68,13 @@ legend{font-weight:bold;font-size:14px}
   <div style="display:flex;flex-wrap:wrap;gap:6px">
     <button onclick="addCap()">Aa</button>
     <button onclick="backspace()">←</button>
-    <button onclick="autoPunctuate()" style="background:#eef0fb;font-weight:bold">Пунктуация (авто)</button>
-    <button onclick="smartPunct()" style="background:#eef7e8">Умная пунктуация</button>
-    <button onclick="numberLines()">Нумерация</button>
     <button onclick="undo()">Отменить</button>
     <button onclick="cutSel()">Вырезать</button>
     <button onclick="copyAll()">Скопировать</button>
     <button onclick="correctText()" style="background:#e8f4e8;font-weight:bold">Исправить ошибки</button>
+    <button onclick="autoPunct()" style="background:#e6efff;font-weight:bold">Пунктуация (авто)</button>
+    <button onclick="smartPunct()" style="background:#e6efff">Умная пунктуация</button>
+    <button onclick="numbering()">Нумерация</button>
     <button onclick="downloadTxt()">Скачать .txt</button>
     <button onclick="clearAll()">Очистить</button>
   </div>
@@ -87,11 +87,11 @@ legend{font-weight:bold;font-size:14px}
 <div id="result" contenteditable="true" spellcheck="true"></div>
 
 <div id="status"></div>
-<div id="stats"></div>
+<div id="stats" style="font-size:12px;color:#777;margin:4px 0"></div>
 
 <section id="whisperPanel">
   <h3>Расшифровка аудио- и видеофайлов (Whisper)</h3>
-  <div class="hint" id="wHint">Для работы нужен локальный сервер: запустите python server.py и откройте блокнот по адресу http://localhost:8000</div>
+  <div class="hint" id="wHint">Для работы нужен локальный сервер: запустите <b>python server.py</b> и откройте блокнот по адресу http://localhost:8000</div>
   <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
     <input type="file" id="audioFile" accept="audio/*,video/*">
     <button onclick="transcribeFile()">Расшифровать файл</button>
@@ -108,44 +108,33 @@ legend{font-weight:bold;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const resultEl = $('result'), previewEl = $('preview'), statusEl = $('status'), statsEl = $('stats'), langSel = $('lang');
+const resultEl = $('result'), previewEl = $('preview'), statusEl = $('status'), langSel = $('lang');
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, listening = false, wantListen = false, quoteOpen = false;
 const undoStack = [];
-let saveTimer = null;
 
 const RU_PUNCT = {'точка':'.','запятая':',','вопросительный знак':'?','восклицательный знак':'!','тире':' — ','дефис':'-','двоеточие':':','точка с запятой':';','новая строка':'\n','с новой строки':'\n','абзац':'\n\n'};
 const EN_PUNCT = {'period':'.','comma':',','question mark':'?','exclamation mark':'!','dash':' — ','new line':'\n','new paragraph':'\n\n'};
 
-const INITIATORS = new Set(('ты он она оно они мы вы потом затем теперь кстати например наверное кажется правда значит сегодня вчера завтра вдруг тут здесь иногда хорошо давай смотри слушай представь').split(' '));
+const STARTERS = ['ты','он','она','оно','они','мы','вы','но','а','и','да','потом','затем','когда','если','поэтому','потому','чтобы','который','которая','которое','которые','как','где','куда','что','только','уже','вот','так','также','тоже','ведь','хотя','однако','вдруг','опять','снова','там','тут','здесь','все','всё','зато'];
 
 function status(msg){ statusEl.textContent = msg; }
+function pushUndo(){ undoStack.push(resultEl.innerHTML); if(undoStack.length > 60) undoStack.shift(); }
 
+let saveTimer = null;
 function doSave(){
+  if(saveTimer){ clearTimeout(saveTimer); saveTimer = null; }
   try{
     localStorage.setItem('notepadDraft', resultEl.innerText);
     localStorage.setItem('notepadLang', langSel.value);
+    localStorage.setItem('notepadLower', $('chkLower').checked ? '1' : '0');
   }catch(e){}
-  updateStats();
 }
-function saveDraft(){ clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 1200); }
-function saveNow(){ clearTimeout(saveTimer); doSave(); }
-window.addEventListener('beforeunload', saveNow);
-
-function updateStats(){
-  const t = resultEl.innerText;
-  const words = (t.match(/[A-Za-zА-Яа-яЁё0-9]+(?:-[A-Za-zА-Яа-яЁё0-9]+)*/g) || []).length;
-  const mins = Math.max(1, Math.round(words / 130));
-  statsEl.textContent = 'Слов: ' + words + ' · Символов: ' + t.length + ' · Чтение вслух: ~' + mins + ' мин';
+function saveDraft(){
+  if(saveTimer) return;
+  saveTimer = setTimeout(doSave, 1200);
 }
-
-function pushUndo(){
-  const html = resultEl.innerHTML;
-  const last = undoStack[undoStack.length - 1];
-  if(last && last.length === html.length && last === html) return;
-  undoStack.push(html);
-  if(undoStack.length > 60) undoStack.shift();
-}
+window.addEventListener('beforeunload', doSave);
 
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
@@ -155,89 +144,92 @@ function applyVoicePunct(s){
     const re = new RegExp('(^|[\\s(«"„])' + escapeRe(word) + '(?=$|[\\s).,!?»":;—-])', 'gi');
     s = s.replace(re, function(m, p){ return p + map[word]; });
   }
+  s = s.replace(/ +([.,;:!?])/g, '$1');
+  s = s.replace(/ {2,}/g, ' ');
   return s;
 }
 
-function isBlock(n){
-  return n.nodeType === 1 && /^(DIV|P|LI|UL|OL|H[1-6]|TABLE|PRE|BLOCKQUOTE|SECTION|ARTICLE)$/.test(n.tagName);
+function preTextOf(range){
+  const pre = document.createRange();
+  pre.selectNodeContents(resultEl);
+  pre.setEnd(range.startContainer, range.startOffset);
+  return pre.toString();
 }
-
-function lastTextNode(n){
-  if(n.nodeType === 3) return n;
-  for(let i = n.childNodes.length - 1; i >= 0; i--){
-    const r = lastTextNode(n.childNodes[i]);
-    if(r) return r;
-  }
-  return null;
-}
-
-/* Ищет последний видимый символ перед позицией (node, offset).
-   Возвращает {node, offset, ch, crossed} — символ и флаг «пересекли границу блока»,
-   {block:true} — перед курсором граница блока или перенос строки,
-   null — начало документа. */
-function prevCharPos(node, offset){
-  if(node.nodeType === 3 && offset > 0){
-    return {node:node, offset:offset, ch:node.data[offset-1], crossed:false};
-  }
-  let cur = node, curOff = offset, crossed = false;
-  while(cur && cur !== resultEl){
-    let sib;
-    if(cur.nodeType === 1){
-      if(curOff > 0){
-        sib = cur.childNodes[curOff - 1];
-        const t = lastTextNode(sib);
-        if(t && t.data.length) return {node:t, offset:t.data.length, ch:t.data[t.data.length-1], crossed:crossed};
-        if(isBlock(sib) || sib.nodeName === 'BR') return {block:true};
-        sib = sib.previousSibling;
-        crossed = true;
-      } else {
-        sib = cur.previousSibling;
-      }
-    } else {
-      sib = cur.previousSibling;
+function lineCtx(range){
+  const c = range.startContainer, o = range.startOffset;
+  const preText = preTextOf(range);
+  const before = preText.length ? preText[preText.length - 1] : '';
+  let atLineStart = false;
+  if(c.nodeType === 3){
+    atLineStart = o === 0;
+  } else {
+    atLineStart = true;
+    for(let i = o - 1; i >= 0; i--){
+      const n = c.childNodes[i];
+      if(n.nodeType === 1){
+        if(n.nodeName === 'BR') break;
+        if(n.textContent){ atLineStart = false; break; }
+      } else if(n.textContent){ atLineStart = false; break; }
     }
-    while(sib){
-      const t = lastTextNode(sib);
-      if(t && t.data.length) return {node:t, offset:t.data.length, ch:t.data[t.data.length-1], crossed:crossed};
-      if(isBlock(sib) || sib.nodeName === 'BR') return {block:true};
-      sib = sib.previousSibling;
-      crossed = true;
-    }
-    cur = cur.parentNode;
-    curOff = 0;
   }
-  return null;
+  return {preText: preText, before: before, atLineStart: atLineStart};
+}
+function deleteCharBefore(range){
+  let c = range.startContainer, o = range.startOffset;
+  if(c.nodeType === 3){
+    if(o > 0){
+      c.textContent = c.textContent.slice(0, o - 1) + c.textContent.slice(o);
+      range.setStart(c, o - 1); range.collapse(true);
+      return true;
+    }
+    c = c.previousSibling;
+    if(!c) return false;
+  } else {
+    c = o > 0 ? c.childNodes[o - 1] : c.previousSibling;
+    if(!c) return false;
+  }
+  let t = null;
+  while(!t){
+    if(c.nodeType === 3 && c.textContent.length) t = c;
+    else t = lastTextNode(c);
+    if(!t){
+      if(c.previousSibling) c = c.previousSibling;
+      else return false;
+    }
+  }
+  if(t.textContent.length){ t.textContent = t.textContent.slice(0, -1); return true; }
+  return false;
 }
 
-/* Вставка финального текста: в позицию курсора, если он внутри поля; иначе — в конец.
-   Сама решает, нужен ли пробел перед вставкой и заглавная буква. */
 function insertFinal(text, conf){
   if(!text) return;
   pushUndo();
   const sel = window.getSelection();
+  const inField = sel.rangeCount && resultEl.contains(sel.anchorNode);
   let range;
-  if(sel.rangeCount && resultEl.contains(sel.anchorNode)){
-    range = sel.getRangeAt(0);
+  let hadSel = false;
+  if(inField && !sel.isCollapsed){
+    range = sel.getRangeAt(0); range.deleteContents(); hadSel = true;
+  } else if(inField){
+    range = sel.getRangeAt(0).cloneRange(); range.collapse(true);
   } else {
-    range = document.createRange();
-    range.selectNodeContents(resultEl);
-    range.collapse(false);
+    range = document.createRange(); range.selectNodeContents(resultEl); range.collapse(false);
   }
-  let prevCh = null, prevIsBreak = false, crossed = false;
-  if(range.collapsed){
-    const pc = prevCharPos(range.startContainer, range.startOffset);
-    if(!pc){ prevCh = null; }
-    else if(pc.block){ prevIsBreak = true; }
-    else { prevCh = pc.ch; crossed = pc.crossed; }
-  } else {
-    const s = range.toString();
-    prevCh = s.length ? s[s.length - 1] : null;
-    range.deleteContents();
+  let ctx = lineCtx(range);
+  const isPunct = /^[.,;:!?»)\]]$/.test(text);
+  if(text === ' — ' && (ctx.before === ' ' || ctx.before === '\u00a0')) text = '—';
+  if(isPunct && (ctx.before === ' ' || ctx.before === '\u00a0')){
+    if(deleteCharBefore(range)) ctx = lineCtx(range);
+  } else if(!isPunct && !/^\s/.test(text) && ctx.before && ctx.before !== ' ' && ctx.before !== '\n' && ctx.before !== '\u00a0'){
+    text = ' ' + text;
   }
-  const needCap = prevCh === null || prevIsBreak || /[\n.!?]/.test(prevCh || '');
-  const needSpace = prevCh !== null && !prevIsBreak && !crossed && !/[\s]/.test(prevCh) && !/^\s/.test(text) && !/^[.,!?;:»)\]]/.test(text);
-  if(needCap && /^[a-zа-яё]/.test(text)) text = text[0].toUpperCase() + text.slice(1);
-  if(needSpace) text = ' ' + text;
+  const capNeeded = ctx.atLineStart || !ctx.preText.trim() || /[.!?]\s*$/.test(ctx.preText);
+  if(capNeeded && /^[a-zа-яё]/.test(text)){
+    text = text[0].toUpperCase() + text.slice(1);
+  } else if(!capNeeded && !isPunct && $('chkLower').checked && /^[А-ЯЁ]/.test(text)){
+    const fw = text.split(/\s/)[0];
+    if(!(fw.length > 1 && fw === fw.toUpperCase())) text = text[0].toLowerCase() + text.slice(1);
+  }
   let node;
   if(conf !== undefined && conf < 0.6 && $('chkConf').checked){
     node = document.createElement('span'); node.className = 'lowconf';
@@ -248,7 +240,7 @@ function insertFinal(text, conf){
   range.insertNode(node);
   range.setStartAfter(node); range.collapse(true);
   sel.removeAllRanges(); sel.addRange(range);
-  saveDraft();
+  saveDraft(); scheduleStats();
 }
 
 function initRec(){
@@ -270,16 +262,8 @@ function initRec(){
     previewEl.value = interim;
   };
   rec.onerror = function(e){
-    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
-      wantListen = false; listening = false;
-      $('recBtn').classList.remove('recording');
-      $('recBtn').textContent = '● Включить запись';
-      resultEl.spellcheck = true;
-      stopLevel();
-      status('Нет доступа к микрофону — разрешите его в настройках браузера и включите запись снова.');
-    } else if(e.error === 'network'){
-      status('Проблема с сетью распознавания, перезапускаю…');
-    }
+    if(e.error === 'not-allowed') status('Нет доступа к микрофону — разрешите его в браузере.');
+    else if(e.error === 'network') status('Ошибка сети распознавания, перезапускаю…');
   };
   rec.onend = function(){
     if(wantListen){
@@ -296,17 +280,17 @@ function toggleRecord(){
     rec.lang = langSel.value;
     wantListen = true; listening = true;
     try{ rec.start(); }catch(e){}
+    resultEl.spellcheck = false;
     $('recBtn').classList.add('recording');
     $('recBtn').textContent = '■ Остановить запись';
     status('Слушаю…');
-    resultEl.spellcheck = false;
     startLevel();
   } else {
     wantListen = false; listening = false;
-    try{ rec.stop(); }catch(e){}
+    rec.stop();
+    resultEl.spellcheck = true;
     $('recBtn').classList.remove('recording');
     $('recBtn').textContent = '● Включить запись';
-    resultEl.spellcheck = true;
     stopLevel();
   }
 }
@@ -317,8 +301,7 @@ async function startLevel(){
     micStream = await navigator.mediaDevices.getUserMedia({audio:true});
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const src = audioCtx.createMediaStreamSource(micStream);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
+    analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
     src.connect(analyser);
     drawLevel();
   }catch(e){ status('Не удалось получить уровень звука: ' + e.message); }
@@ -361,7 +344,7 @@ function drawLevelIdle(){
 const PUNCT = [
   ['⏎', '\n', 'Новая строка'], ['«»', '"', 'Кавычки (чередуются)'], [' — ', ' — ', 'Тире'],
   ['-', '-', 'Дефис'], [':', ':', 'Двоеточие'], [';', ';', 'Точка с запятой'],
-  ['*', '*', 'Звёздочка'], ['(', '(', 'Открыть скобку'], [')', ')', 'Закрыть скобку'],
+  ['*', '*', 'Звёздочка'], ['(', '(', 'Открыть скобку'), [')', ')', 'Закрыть скобку'],
   ['!', '!', 'Восклицательный знак'], ['?', '?', 'Вопросительный знак'],
   [',', ',', 'Запятая'], ['.', '.', 'Точка'], ['␣', ' ', 'Пробел']
 ];
@@ -372,13 +355,22 @@ const PUNCT = [
     b.className = 'pbtn'; b.textContent = p[0]; b.title = p[2];
     b.onclick = function(){ insertPunct(p[1]); };
     row.appendChild(b);
-  });
+  })();
 })();
 
 function insertPunct(sign){
   if(sign === '"'){ sign = quoteOpen ? '»' : '«'; quoteOpen = !quoteOpen; }
-  resultEl.focus();
   insertFinal(sign, 1);
+  resultEl.focus();
+}
+
+function lastTextNode(n){
+  if(n.nodeType === 3) return n;
+  for(let i = n.childNodes.length - 1; i >= 0; i--){
+    const r = lastTextNode(n.childNodes[i]);
+    if(r) return r;
+  }
+  return null;
 }
 
 function addCap(){
@@ -415,7 +407,7 @@ function backspace(){
 function undo(){
   if(!undoStack.length){ status('Отменять нечего'); return; }
   resultEl.innerHTML = undoStack.pop();
-  saveDraft();
+  saveDraft(); scheduleStats();
   status('Отменено');
 }
 
@@ -447,14 +439,14 @@ function cutSel(){
     resultEl.textContent = '';
     status('Весь текст вырезан в буфер');
   }
-  saveDraft();
+  saveDraft(); scheduleStats();
 }
 
 function clearAll(){
   pushUndo();
   resultEl.textContent = '';
   previewEl.value = '';
-  saveDraft();
+  saveDraft(); scheduleStats();
   status('Поле очищено (можно вернуть кнопкой «Отменить»)');
 }
 
@@ -469,94 +461,68 @@ function downloadTxt(){
   URL.revokeObjectURL(a.href);
 }
 
-/* Автопунктуация на правилах: работает офлайн, без нейросети */
-function splitRun(line){
-  const parts = line.split(/(\s+)/);
-  let count = 0, added = 0, out = '';
-  for(let i = 0; i < parts.length; i++){
-    const w = parts[i];
-    if(w === '' || /^\s+$/.test(w)){ out += w; continue; }
-    const bare = w.toLowerCase().replace(/^[«"(\[—-]+/, '').replace(/[»",.!?;:\])—-]+$/, '');
-    if(count >= 4 && INITIATORS.has(bare)){
-      out = out.replace(/\s+$/, '') + '. ' + w;
-      added++; count = 1;
-    } else { out += w; count++; }
-  }
-  return {text: out.replace(/\s+$/, ''), added: added};
+function updateStats(){
+  const t = resultEl.innerText.trim();
+  const words = t ? t.split(/\s+/).length : 0;
+  const mins = Math.max(1, Math.round(words / 150));
+  $('stats').textContent = 'Слов: ' + words + ' · Символов: ' + t.length + ' · Чтение вслух: ~' + mins + ' мин';
+}
+let statsTimer = null;
+function scheduleStats(){
+  if(statsTimer) return;
+  statsTimer = setTimeout(function(){ statsTimer = null; updateStats(); }, 300);
 }
 
-function autoPunctuate(){
-  const text = resultEl.innerText;
-  if(!text.trim()){ status('Текст пуст'); return; }
+function autoPunct(){
+  const t = resultEl.innerText;
+  if(!t.trim()){ status('Текст пуст'); return; }
   pushUndo();
-  let sentAdded = 0, spaceAdded = 0, capsAdded = 0;
-  const lines = text.split('\n');
-  const processed = lines.map(function(line){
-    if(!line.trim() || /[.!?]/.test(line)) return line;
-    const r = splitRun(line);
-    let s = r.text;
-    if(r.added > 0){
-      sentAdded += r.added;
-      if(!/[.!?,;:—-]$/.test(s)) s += '.';
+  let s = t;
+  let nSp = 0, nCap = 0, nSent = 0;
+  s = s.replace(/[ \t]+([.,;:!?])/g, function(m, p){ nSp += m.length - 1; return p; });
+  s = s.replace(/([,;:!?])(?=[^\s\d.,;:!?»)"\]])/g, function(m){ nSp++; return m + ' '; });
+  s = s.replace(/\.([А-ЯЁA-Z])/g, function(m, c){ nSp++; return '. ' + c; });
+  s = s.replace(/ {2,}/g, ' ');
+  const lines = s.split('\n');
+  const outLines = [];
+  for(const line of lines){
+    if(!line.trim()){ outLines.push(line); continue; }
+    if(/[.!?]/.test(line)){ outLines.push(line); continue; }
+    const words = line.trim().split(/ +/);
+    const parts = []; let buf = [];
+    for(const w of words){
+      const core = w.toLowerCase().replace(/[^a-zа-яё]/g, '');
+      if(buf.length >= 4 && STARTERS.indexOf(core) !== -1){
+        parts.push(buf.join(' ')); buf = [w];
+      } else buf.push(w);
     }
-    return s;
-  });
-  let out = processed.join('\n');
-  out = out.replace(/[ \t]+([.,!?;:%»)\]])/g, function(m, p){ spaceAdded++; return p; });
-  out = out.replace(/([,;:])(?=[^\s\d])/g, function(m, p){ spaceAdded++; return p + ' '; });
-  out = out.replace(/([.!?])(?=[А-ЯЁA-Z«"(])/g, function(m, p){ spaceAdded++; return p + ' '; });
-  out = out.replace(/[ \t]{2,}/g, ' ');
-  out = out.replace(/[ \t]+\n/g, '\n');
-  out = out.replace(/\n[ \t]+/g, '\n');
-  out = out.replace(/(^|[.!?]\s+|\n)([a-zа-яё])/g, function(m, p, c){ capsAdded++; return p + c.toUpperCase(); });
-  out = out.replace(/(^|[\s—("«\n])я(?=$|[\s.,!?;:»")\n])/g, function(m, p){ capsAdded++; return p + 'Я'; });
-  if(out === text){ undoStack.pop(); status('Изменений не требуется'); return; }
-  resultEl.textContent = out;
-  saveDraft();
-  status('Автопунктуация: предложений +' + sentAdded + ', пробелов исправлено ' + spaceAdded + ', заглавных +' + capsAdded);
-}
-
-/* Умная пунктуация через нейросеть (нужен локальный сервер с настроенным GigaChat) */
-async function smartPunct(){
-  const text = resultEl.innerText;
-  if(!text.trim()){ status('Текст пуст'); return; }
-  status('Нейросеть расставляет пунктуацию…');
-  try{
-    const resp = await fetch('/punctuate', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: text})
-    });
-    if(!resp.ok) throw new Error('сервер вернул ошибку ' + resp.status);
-    const data = await resp.json();
-    if(data.error) throw new Error(data.error);
-    if(typeof data.text !== 'string') throw new Error('неожиданный ответ сервера');
-    pushUndo();
-    resultEl.textContent = data.text;
-    saveDraft();
-    status('Умная пунктуация готова');
-  }catch(e){
-    status('Умная пунктуация требует локальный сервер: запустите python server.py и откройте блокнот по адресу http://localhost:8000 (' + e.message + ')');
+    parts.push(buf.join(' '));
+    if(parts.length > 1) nSent += parts.length - 1;
+    let joined = parts.join('. ');
+    if(!/[.!?]$/.test(joined)) joined += '.';
+    outLines.push(joined);
   }
+  s = outLines.join('\n');
+  s = s.replace(/(^|[.!?]\s+|\n+)([a-zа-яё])/g, function(m, p, c){ nCap++; return p + c.toUpperCase(); });
+  s = s.replace(/(^|[\s«("—-])я(?=[\s.,!?»)"—:-]|$)/g, function(m, p){ nCap++; return p + 'Я'; });
+  resultEl.textContent = s;
+  saveDraft(); scheduleStats();
+  status('Пунктуация (авто): предложений ' + nSent + ', пробелов ' + nSp + ', заглавных ' + nCap);
 }
 
-/* Автонумерация непустых строк: 1. 2. 3. … */
-function numberLines(){
-  const text = resultEl.innerText;
-  if(!text.trim()){ status('Текст пуст'); return; }
+function numbering(){
+  const t = resultEl.innerText;
+  if(!t.trim()){ status('Текст пуст'); return; }
   pushUndo();
-  const lines = text.split('\n');
-  let n = 0, changed = false;
-  const out = lines.map(function(line){
-    if(!line.trim()) return line;
-    if(/^\s*\d+[.)]\s/.test(line)) return line;
-    n++; changed = true;
-    return n + '. ' + line.replace(/^\s+/, '');
-  }).join('\n');
-  if(!changed){ undoStack.pop(); status('Все строки уже пронумерованы'); return; }
-  resultEl.textContent = out;
-  saveDraft();
-  status('Пронумеровано строк: ' + n);
+  const lines = t.split('\n');
+  let n = 0;
+  const out = lines.map(function(l){
+    if(l.trim() && !/^\s*\d+[.)]\s/.test(l)){ n++; return n + '. ' + l.trim(); }
+    return l;
+  });
+  resultEl.textContent = out.join('\n');
+  saveDraft(); scheduleStats();
+  status('Пронумеровано абзацев: ' + n);
 }
 
 function splitChunks(s, n){
@@ -572,6 +538,25 @@ function splitChunks(s, n){
   return out;
 }
 
+async function fetchLT(chunk, lang){
+  const ctrl = new AbortController();
+  const to = setTimeout(function(){ ctrl.abort(); }, 25000);
+  try{
+    const resp = await fetch('https://api.languagetool.org/v2/check', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({text: chunk, language: lang}),
+      signal: ctrl.signal
+    });
+    clearTimeout(to);
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    return await resp.json();
+  }catch(e){
+    clearTimeout(to);
+    throw e;
+  }
+}
+
 async function correctText(){
   const text = resultEl.innerText;
   if(!text.trim()){ status('Текст пуст'); return; }
@@ -582,13 +567,16 @@ async function correctText(){
     const corrected = [];
     let fixed = 0;
     for(const chunk of chunks){
-      const resp = await fetch('https://api.languagetool.org/v2/check', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: new URLSearchParams({text: chunk, language: lang})
-      });
-      if(!resp.ok) throw new Error('HTTP ' + resp.status);
-      const data = await resp.json();
+      let data = null;
+      for(let att = 0; att < 2 && !data; att++){
+        try{
+          data = await fetchLT(chunk, lang);
+        }catch(e){
+          if(att === 1) throw e;
+          status('Сервис перегружен или медленно отвечает, повторяю…');
+          await new Promise(function(r){ setTimeout(r, 1500); });
+        }
+      }
       let s = chunk;
       const matches = data.matches.slice().sort(function(a, b){ return b.offset - a.offset; });
       for(const m of matches){
@@ -602,10 +590,36 @@ async function correctText(){
     }
     pushUndo();
     resultEl.textContent = corrected.join('');
-    saveDraft();
+    saveDraft(); scheduleStats();
     status('Исправлено ошибок: ' + fixed);
   }catch(e){
-    status('Ошибка проверки: ' + e.message);
+    status('Ошибка проверки: ' + (e.name === 'AbortError' ? 'сервис не ответил за 25 сек — попробуйте позже' : e.message));
+  }
+}
+
+async function smartPunct(){
+  const text = resultEl.innerText;
+  if(!text.trim()){ status('Текст пуст'); return; }
+  if(location.protocol === 'file:'){ status('Умная пунктуация работает только при запуске с локального сервера (python server.py)'); return; }
+  status('Улучшаю пунктуацию нейросетью…');
+  try{
+    const resp = await fetch('/punctuate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text})
+    });
+    if(!resp.ok) throw new Error('сервер вернул ошибку ' + resp.status);
+    const data = await resp.json();
+    if(data.error) throw new Error(data.error);
+    const out = (data.text || '').trim();
+    if(out){
+      pushUndo();
+      resultEl.textContent = out;
+      saveDraft(); scheduleStats();
+      status('Умная пунктуация готова');
+    } else status('Сервер вернул пустой ответ');
+  }catch(e){
+    status('Ошибка умной пунктуации: ' + e.message);
   }
 }
 
@@ -648,15 +662,17 @@ document.addEventListener('keydown', function(e){
 langSel.addEventListener('change', function(){
   if(rec) rec.lang = langSel.value;
   if(listening) rec.stop();
-  saveDraft();
+  doSave();
 });
-resultEl.addEventListener('input', saveDraft);
+resultEl.addEventListener('input', function(){ saveDraft(); scheduleStats(); });
 
 try{
   const d = localStorage.getItem('notepadDraft');
   if(d) resultEl.textContent = d;
   const l = localStorage.getItem('notepadLang');
   if(l) langSel.value = l;
+  const lo = localStorage.getItem('notepadLower');
+  if(lo !== null) $('chkLower').checked = lo === '1';
 }catch(e){}
 updateStats();
 
@@ -665,5 +681,3 @@ if(location.protocol === 'file:'){
     '<div class="hint">Панель доступна при запуске блокнота с локального сервера: запустите <b>python server.py</b> и откройте блокнот по адресу http://localhost:8000</div>';
 }
 </script>
-</body>
-</html>
