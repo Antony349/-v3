@@ -72,9 +72,6 @@ legend{font-weight:bold;font-size:14px}
     <button onclick="cutSel()">Вырезать</button>
     <button onclick="copyAll()">Скопировать</button>
     <button onclick="correctText()" style="background:#e8f4e8;font-weight:bold">Исправить ошибки</button>
-    <button onclick="autoPunct()" style="background:#e6efff;font-weight:bold">Пунктуация (авто)</button>
-    <button onclick="smartPunct()" style="background:#e6efff">Умная пунктуация</button>
-    <button onclick="numbering()">Нумерация</button>
     <button onclick="downloadTxt()">Скачать .txt</button>
     <button onclick="clearAll()">Очистить</button>
   </div>
@@ -87,7 +84,6 @@ legend{font-weight:bold;font-size:14px}
 <div id="result" contenteditable="true" spellcheck="true"></div>
 
 <div id="status"></div>
-<div id="stats" style="font-size:12px;color:#777;margin:4px 0"></div>
 
 <section id="whisperPanel">
   <h3>Расшифровка аудио- и видеофайлов (Whisper)</h3>
@@ -116,26 +112,9 @@ const undoStack = [];
 const RU_PUNCT = {'точка':'.','запятая':',','вопросительный знак':'?','восклицательный знак':'!','тире':' — ','дефис':'-','двоеточие':':','точка с запятой':';','новая строка':'\n','с новой строки':'\n','абзац':'\n\n'};
 const EN_PUNCT = {'period':'.','comma':',','question mark':'?','exclamation mark':'!','dash':' — ','new line':'\n','new paragraph':'\n\n'};
 
-const STARTERS = ['ты','он','она','оно','они','мы','вы','но','а','и','да','потом','затем','когда','если','поэтому','потому','чтобы','который','которая','которое','которые','как','где','куда','что','только','уже','вот','так','также','тоже','ведь','хотя','однако','вдруг','опять','снова','там','тут','здесь','все','всё','зато'];
-
 function status(msg){ statusEl.textContent = msg; }
-function pushUndo(){ undoStack.push(resultEl.innerHTML); if(undoStack.length > 60) undoStack.shift(); }
-
-let saveTimer = null;
-function doSave(){
-  if(saveTimer){ clearTimeout(saveTimer); saveTimer = null; }
-  try{
-    localStorage.setItem('notepadDraft', resultEl.innerText);
-    localStorage.setItem('notepadLang', langSel.value);
-    localStorage.setItem('notepadLower', $('chkLower').checked ? '1' : '0');
-  }catch(e){}
-}
-function saveDraft(){
-  if(saveTimer) return;
-  saveTimer = setTimeout(doSave, 1200);
-}
-window.addEventListener('beforeunload', doSave);
-
+function pushUndo(){ undoStack.push(resultEl.innerHTML); if(undoStack.length > 200) undoStack.shift(); }
+function saveDraft(){ try{ localStorage.setItem('notepadDraft', resultEl.innerText); localStorage.setItem('notepadLang', langSel.value); try{ localStorage.setItem('notepadChecks', JSON.stringify([$('chkPunct').checked, $('chkConf').checked, $('chkLower').checked])); }catch(e){} }
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function applyVoicePunct(s){
@@ -144,91 +123,25 @@ function applyVoicePunct(s){
     const re = new RegExp('(^|[\\s(«"„])' + escapeRe(word) + '(?=$|[\\s).,!?»":;—-])', 'gi');
     s = s.replace(re, function(m, p){ return p + map[word]; });
   }
-  s = s.replace(/ +([.,;:!?])/g, '$1');
-  s = s.replace(/ {2,}/g, ' ');
   return s;
-}
-
-function preTextOf(range){
-  const pre = document.createRange();
-  pre.selectNodeContents(resultEl);
-  pre.setEnd(range.startContainer, range.startOffset);
-  return pre.toString();
-}
-function lineCtx(range){
-  const c = range.startContainer, o = range.startOffset;
-  const preText = preTextOf(range);
-  const before = preText.length ? preText[preText.length - 1] : '';
-  let atLineStart = false;
-  if(c.nodeType === 3){
-    atLineStart = o === 0;
-  } else {
-    atLineStart = true;
-    for(let i = o - 1; i >= 0; i--){
-      const n = c.childNodes[i];
-      if(n.nodeType === 1){
-        if(n.nodeName === 'BR') break;
-        if(n.textContent){ atLineStart = false; break; }
-      } else if(n.textContent){ atLineStart = false; break; }
-    }
-  }
-  return {preText: preText, before: before, atLineStart: atLineStart};
-}
-function deleteCharBefore(range){
-  let c = range.startContainer, o = range.startOffset;
-  if(c.nodeType === 3){
-    if(o > 0){
-      c.textContent = c.textContent.slice(0, o - 1) + c.textContent.slice(o);
-      range.setStart(c, o - 1); range.collapse(true);
-      return true;
-    }
-    c = c.previousSibling;
-    if(!c) return false;
-  } else {
-    c = o > 0 ? c.childNodes[o - 1] : c.previousSibling;
-    if(!c) return false;
-  }
-  let t = null;
-  while(!t){
-    if(c.nodeType === 3 && c.textContent.length) t = c;
-    else t = lastTextNode(c);
-    if(!t){
-      if(c.previousSibling) c = c.previousSibling;
-      else return false;
-    }
-  }
-  if(t.textContent.length){ t.textContent = t.textContent.slice(0, -1); return true; }
-  return false;
 }
 
 function insertFinal(text, conf){
   if(!text) return;
   pushUndo();
+  const prev = resultEl.innerText;
+  const capNeeded = !prev.trim() || /[.!?]\s*$|\n\s*$/.test(prev);
+  if(capNeeded && /^[a-zа-яё]/.test(text)) text = text[0].toUpperCase() + text.slice(1);
+  if($('chkLower').checked && !capNeeded && prev.trim() && /^[А-ЯЁA-Z]/.test(text)){
+    const w0 = text.split(/\s+/)[0];
+    if(!/^[А-ЯЁA-Z]{2,}[\s\-—]*/.test(w0)) text = text[0].toLowerCase() + text.slice(1);
+  }
   const sel = window.getSelection();
-  const inField = sel.rangeCount && resultEl.contains(sel.anchorNode);
   let range;
-  let hadSel = false;
-  if(inField && !sel.isCollapsed){
-    range = sel.getRangeAt(0); range.deleteContents(); hadSel = true;
-  } else if(inField){
-    range = sel.getRangeAt(0).cloneRange(); range.collapse(true);
+  if(sel.rangeCount && resultEl.contains(sel.anchorNode) && !sel.isCollapsed){
+    range = sel.getRangeAt(0); range.deleteContents();
   } else {
     range = document.createRange(); range.selectNodeContents(resultEl); range.collapse(false);
-  }
-  let ctx = lineCtx(range);
-  const isPunct = /^[.,;:!?»)\]]$/.test(text);
-  if(text === ' — ' && (ctx.before === ' ' || ctx.before === '\u00a0')) text = '—';
-  if(isPunct && (ctx.before === ' ' || ctx.before === '\u00a0')){
-    if(deleteCharBefore(range)) ctx = lineCtx(range);
-  } else if(!isPunct && !/^\s/.test(text) && ctx.before && ctx.before !== ' ' && ctx.before !== '\n' && ctx.before !== '\u00a0'){
-    text = ' ' + text;
-  }
-  const capNeeded = ctx.atLineStart || !ctx.preText.trim() || /[.!?]\s*$/.test(ctx.preText);
-  if(capNeeded && /^[a-zа-яё]/.test(text)){
-    text = text[0].toUpperCase() + text.slice(1);
-  } else if(!capNeeded && !isPunct && $('chkLower').checked && /^[А-ЯЁ]/.test(text)){
-    const fw = text.split(/\s/)[0];
-    if(!(fw.length > 1 && fw === fw.toUpperCase())) text = text[0].toLowerCase() + text.slice(1);
   }
   let node;
   if(conf !== undefined && conf < 0.6 && $('chkConf').checked){
@@ -240,7 +153,7 @@ function insertFinal(text, conf){
   range.insertNode(node);
   range.setStartAfter(node); range.collapse(true);
   sel.removeAllRanges(); sel.addRange(range);
-  saveDraft(); scheduleStats();
+  saveDraft();
 }
 
 function initRec(){
@@ -266,9 +179,8 @@ function initRec(){
     else if(e.error === 'network') status('Ошибка сети распознавания, перезапускаю…');
   };
   rec.onend = function(){
-    if(wantListen){
-      setTimeout(function(){ if(wantListen){ try{ rec.start(); }catch(e){} } }, 300);
-    } else status('Запись остановлена');
+    if(wantListen){ try{ rec.start(); }catch(e){} }
+    else status('Запись остановлена');
   };
   return true;
 }
@@ -280,7 +192,6 @@ function toggleRecord(){
     rec.lang = langSel.value;
     wantListen = true; listening = true;
     try{ rec.start(); }catch(e){}
-    resultEl.spellcheck = false;
     $('recBtn').classList.add('recording');
     $('recBtn').textContent = '■ Остановить запись';
     status('Слушаю…');
@@ -288,7 +199,6 @@ function toggleRecord(){
   } else {
     wantListen = false; listening = false;
     rec.stop();
-    resultEl.spellcheck = true;
     $('recBtn').classList.remove('recording');
     $('recBtn').textContent = '● Включить запись';
     stopLevel();
@@ -344,7 +254,7 @@ function drawLevelIdle(){
 const PUNCT = [
   ['⏎', '\n', 'Новая строка'], ['«»', '"', 'Кавычки (чередуются)'], [' — ', ' — ', 'Тире'],
   ['-', '-', 'Дефис'], [':', ':', 'Двоеточие'], [';', ';', 'Точка с запятой'],
-  ['*', '*', 'Звёздочка'], ['(', '(', 'Открыть скобку'), [')', ')', 'Закрыть скобку'],
+  ['*', '*', 'Звёздочка'], ['(', '(', 'Открыть скобку'], [')', ')', 'Закрыть скобку'],
   ['!', '!', 'Восклицательный знак'], ['?', '?', 'Вопросительный знак'],
   [',', ',', 'Запятая'], ['.', '.', 'Точка'], ['␣', ' ', 'Пробел']
 ];
@@ -355,7 +265,7 @@ const PUNCT = [
     b.className = 'pbtn'; b.textContent = p[0]; b.title = p[2];
     b.onclick = function(){ insertPunct(p[1]); };
     row.appendChild(b);
-  })();
+  });
 })();
 
 function insertPunct(sign){
@@ -407,7 +317,7 @@ function backspace(){
 function undo(){
   if(!undoStack.length){ status('Отменять нечего'); return; }
   resultEl.innerHTML = undoStack.pop();
-  saveDraft(); scheduleStats();
+  saveDraft();
   status('Отменено');
 }
 
@@ -439,14 +349,14 @@ function cutSel(){
     resultEl.textContent = '';
     status('Весь текст вырезан в буфер');
   }
-  saveDraft(); scheduleStats();
+  saveDraft();
 }
 
 function clearAll(){
   pushUndo();
   resultEl.textContent = '';
   previewEl.value = '';
-  saveDraft(); scheduleStats();
+  saveDraft();
   status('Поле очищено (можно вернуть кнопкой «Отменить»)');
 }
 
@@ -459,70 +369,6 @@ function downloadTxt(){
   a.download = 'заметка.txt';
   a.click();
   URL.revokeObjectURL(a.href);
-}
-
-function updateStats(){
-  const t = resultEl.innerText.trim();
-  const words = t ? t.split(/\s+/).length : 0;
-  const mins = Math.max(1, Math.round(words / 150));
-  $('stats').textContent = 'Слов: ' + words + ' · Символов: ' + t.length + ' · Чтение вслух: ~' + mins + ' мин';
-}
-let statsTimer = null;
-function scheduleStats(){
-  if(statsTimer) return;
-  statsTimer = setTimeout(function(){ statsTimer = null; updateStats(); }, 300);
-}
-
-function autoPunct(){
-  const t = resultEl.innerText;
-  if(!t.trim()){ status('Текст пуст'); return; }
-  pushUndo();
-  let s = t;
-  let nSp = 0, nCap = 0, nSent = 0;
-  s = s.replace(/[ \t]+([.,;:!?])/g, function(m, p){ nSp += m.length - 1; return p; });
-  s = s.replace(/([,;:!?])(?=[^\s\d.,;:!?»)"\]])/g, function(m){ nSp++; return m + ' '; });
-  s = s.replace(/\.([А-ЯЁA-Z])/g, function(m, c){ nSp++; return '. ' + c; });
-  s = s.replace(/ {2,}/g, ' ');
-  const lines = s.split('\n');
-  const outLines = [];
-  for(const line of lines){
-    if(!line.trim()){ outLines.push(line); continue; }
-    if(/[.!?]/.test(line)){ outLines.push(line); continue; }
-    const words = line.trim().split(/ +/);
-    const parts = []; let buf = [];
-    for(const w of words){
-      const core = w.toLowerCase().replace(/[^a-zа-яё]/g, '');
-      if(buf.length >= 4 && STARTERS.indexOf(core) !== -1){
-        parts.push(buf.join(' ')); buf = [w];
-      } else buf.push(w);
-    }
-    parts.push(buf.join(' '));
-    if(parts.length > 1) nSent += parts.length - 1;
-    let joined = parts.join('. ');
-    if(!/[.!?]$/.test(joined)) joined += '.';
-    outLines.push(joined);
-  }
-  s = outLines.join('\n');
-  s = s.replace(/(^|[.!?]\s+|\n+)([a-zа-яё])/g, function(m, p, c){ nCap++; return p + c.toUpperCase(); });
-  s = s.replace(/(^|[\s«("—-])я(?=[\s.,!?»)"—:-]|$)/g, function(m, p){ nCap++; return p + 'Я'; });
-  resultEl.textContent = s;
-  saveDraft(); scheduleStats();
-  status('Пунктуация (авто): предложений ' + nSent + ', пробелов ' + nSp + ', заглавных ' + nCap);
-}
-
-function numbering(){
-  const t = resultEl.innerText;
-  if(!t.trim()){ status('Текст пуст'); return; }
-  pushUndo();
-  const lines = t.split('\n');
-  let n = 0;
-  const out = lines.map(function(l){
-    if(l.trim() && !/^\s*\d+[.)]\s/.test(l)){ n++; return n + '. ' + l.trim(); }
-    return l;
-  });
-  resultEl.textContent = out.join('\n');
-  saveDraft(); scheduleStats();
-  status('Пронумеровано абзацев: ' + n);
 }
 
 function splitChunks(s, n){
@@ -538,25 +384,6 @@ function splitChunks(s, n){
   return out;
 }
 
-async function fetchLT(chunk, lang){
-  const ctrl = new AbortController();
-  const to = setTimeout(function(){ ctrl.abort(); }, 25000);
-  try{
-    const resp = await fetch('https://api.languagetool.org/v2/check', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: new URLSearchParams({text: chunk, language: lang}),
-      signal: ctrl.signal
-    });
-    clearTimeout(to);
-    if(!resp.ok) throw new Error('HTTP ' + resp.status);
-    return await resp.json();
-  }catch(e){
-    clearTimeout(to);
-    throw e;
-  }
-}
-
 async function correctText(){
   const text = resultEl.innerText;
   if(!text.trim()){ status('Текст пуст'); return; }
@@ -567,16 +394,13 @@ async function correctText(){
     const corrected = [];
     let fixed = 0;
     for(const chunk of chunks){
-      let data = null;
-      for(let att = 0; att < 2 && !data; att++){
-        try{
-          data = await fetchLT(chunk, lang);
-        }catch(e){
-          if(att === 1) throw e;
-          status('Сервис перегружен или медленно отвечает, повторяю…');
-          await new Promise(function(r){ setTimeout(r, 1500); });
-        }
-      }
+      const resp = await fetch('https://api.languagetool.org/v2/check', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: new URLSearchParams({text: chunk, language: lang})
+      });
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
       let s = chunk;
       const matches = data.matches.slice().sort(function(a, b){ return b.offset - a.offset; });
       for(const m of matches){
@@ -590,36 +414,10 @@ async function correctText(){
     }
     pushUndo();
     resultEl.textContent = corrected.join('');
-    saveDraft(); scheduleStats();
+    saveDraft();
     status('Исправлено ошибок: ' + fixed);
   }catch(e){
-    status('Ошибка проверки: ' + (e.name === 'AbortError' ? 'сервис не ответил за 25 сек — попробуйте позже' : e.message));
-  }
-}
-
-async function smartPunct(){
-  const text = resultEl.innerText;
-  if(!text.trim()){ status('Текст пуст'); return; }
-  if(location.protocol === 'file:'){ status('Умная пунктуация работает только при запуске с локального сервера (python server.py)'); return; }
-  status('Улучшаю пунктуацию нейросетью…');
-  try{
-    const resp = await fetch('/punctuate', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: text})
-    });
-    if(!resp.ok) throw new Error('сервер вернул ошибку ' + resp.status);
-    const data = await resp.json();
-    if(data.error) throw new Error(data.error);
-    const out = (data.text || '').trim();
-    if(out){
-      pushUndo();
-      resultEl.textContent = out;
-      saveDraft(); scheduleStats();
-      status('Умная пунктуация готова');
-    } else status('Сервер вернул пустой ответ');
-  }catch(e){
-    status('Ошибка умной пунктуации: ' + e.message);
+    status('Ошибка проверки: ' + e.message);
   }
 }
 
@@ -662,22 +460,23 @@ document.addEventListener('keydown', function(e){
 langSel.addEventListener('change', function(){
   if(rec) rec.lang = langSel.value;
   if(listening) rec.stop();
-  doSave();
+  saveDraft();
 });
-resultEl.addEventListener('input', function(){ saveDraft(); scheduleStats(); });
+resultEl.addEventListener('input', saveDraft);
 
 try{
   const d = localStorage.getItem('notepadDraft');
   if(d) resultEl.textContent = d;
   const l = localStorage.getItem('notepadLang');
   if(l) langSel.value = l;
-  const lo = localStorage.getItem('notepadLower');
-  if(lo !== null) $('chkLower').checked = lo === '1';
+  const c = localStorage.getItem('notepadChecks');
+  if(c){ try{ const a = JSON.parse(c); if(a.length===3){ $('chkPunct').checked=a[0]; $('chkConf').checked=a[1]; $('chkLower').checked=a[2]; } }catch(e){} }
 }catch(e){}
-updateStats();
 
 if(location.protocol === 'file:'){
   $('whisperPanel').innerHTML = '<h3>Расшифровка аудио- и видеофайлов (Whisper)</h3>' +
     '<div class="hint">Панель доступна при запуске блокнота с локального сервера: запустите <b>python server.py</b> и откройте блокнот по адресу http://localhost:8000</div>';
 }
 </script>
+</body>
+</html>
