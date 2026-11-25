@@ -72,6 +72,9 @@ legend{font-weight:bold;font-size:14px}
     <button onclick="cutSel()">Вырезать</button>
     <button onclick="copyAll()">Скопировать</button>
     <button onclick="correctText()" style="background:#e8f4e8;font-weight:bold">Исправить ошибки</button>
+    <button onclick="autoPunct()" style="background:#e8f0e8;font-weight:bold">Пунктуация (авто)</button>
+    <button onclick="smartPunct()" style="background:#e8e8f4">Умная пунктуация</button>
+    <button onclick="numberLines()">Нумерация</button>
     <button onclick="downloadTxt()">Скачать .txt</button>
     <button onclick="clearAll()">Очистить</button>
   </div>
@@ -84,6 +87,7 @@ legend{font-weight:bold;font-size:14px}
 <div id="result" contenteditable="true" spellcheck="true"></div>
 
 <div id="status"></div>
+<div id="stats" class="hint"></div>
 
 <section id="whisperPanel">
   <h3>Расшифровка аудио- и видеофайлов (Whisper)</h3>
@@ -113,36 +117,59 @@ const RU_PUNCT = {'точка':'.','запятая':',','вопроситель�
 const EN_PUNCT = {'period':'.','comma':',','question mark':'?','exclamation mark':'!','dash':' — ','new line':'\n','new paragraph':'\n\n'};
 
 function status(msg){ statusEl.textContent = msg; }
-function pushUndo(){ undoStack.push(resultEl.innerHTML); if(undoStack.length > 200) undoStack.shift(); }
-function saveDraft(){ try{ localStorage.setItem('notepadDraft', resultEl.innerText); localStorage.setItem('notepadLang', langSel.value); try{ localStorage.setItem('notepadChecks', JSON.stringify([$('chkPunct').checked, $('chkConf').checked, $('chkLower').checked])); }catch(e){} }
+function pushUndo(){ undoStack.push(resultEl.innerHTML); if(undoStack.length > 60) undoStack.shift(); }
+function saveDraft(){ try{ localStorage.setItem('notepadDraft', resultEl.innerText); localStorage.setItem('notepadLang', langSel.value); const cl = document.getElementById('chkLower'); localStorage.setItem('notepadChk', JSON.stringify([document.getElementById('chkPunct').checked, document.getElementById('chkConf').checked, cl ? cl.checked : true])); }catch(e){} }
+let saveTimer = null;
+function saveDraftSoon(){ if(saveTimer) return; saveTimer = setTimeout(function(){ saveTimer = null; saveDraft(); }, 1200); }
+function updateStats(){
+  const t = resultEl.innerText.trim();
+  const words = t ? t.split(/\s+/).length : 0;
+  const mins = Math.round(words / 130 * 10) / 10;
+  const st = $('stats');
+  if(st) st.textContent = words + ' слов · ' + t.length + ' символов · ~' + mins + ' мин чтения вслух';
+}
 function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function applyVoicePunct(s){
   const map = langSel.value.indexOf('ru') === 0 ? RU_PUNCT : EN_PUNCT;
   for(const word in map){
     const re = new RegExp('(^|[\\s(«"„])' + escapeRe(word) + '(?=$|[\\s).,!?»":;—-])', 'gi');
-    s = s.replace(re, function(m, p){ return p + map[word]; });
+    s = s.replace(re, function(m, p){
+      const val = map[word];
+      if(val !== '\n' && val !== '\n\n') p = p.replace(/[ \u00A0]+$/, '');
+      return p + val;
+    });
   }
-  return s;
+  return s.replace(/[ \u00A0]{2,}/g, ' ');
 }
 
 function insertFinal(text, conf){
   if(!text) return;
   pushUndo();
-  const prev = resultEl.innerText;
-  const capNeeded = !prev.trim() || /[.!?]\s*$|\n\s*$/.test(prev);
-  if(capNeeded && /^[a-zа-яё]/.test(text)) text = text[0].toUpperCase() + text.slice(1);
-  if($('chkLower').checked && !capNeeded && prev.trim() && /^[А-ЯЁA-Z]/.test(text)){
-    const w0 = text.split(/\s+/)[0];
-    if(!/^[А-ЯЁA-Z]{2,}[\s\-—]*/.test(w0)) text = text[0].toLowerCase() + text.slice(1);
-  }
   const sel = window.getSelection();
-  let range;
-  if(sel.rangeCount && resultEl.contains(sel.anchorNode) && !sel.isCollapsed){
-    range = sel.getRangeAt(0); range.deleteContents();
+  let range, beforeText = '';
+  if(sel.rangeCount && resultEl.contains(sel.anchorNode)){
+    range = sel.getRangeAt(0);
+    if(!sel.isCollapsed) range.deleteContents();
+    const sc = range.startContainer;
+    if(sc.nodeType === 3){
+      beforeText = sc.textContent.slice(0, range.startOffset);
+    } else {
+      let acc = '';
+      for(let i = 0; i < range.startOffset && i < sc.childNodes.length; i++) acc += sc.childNodes[i].textContent || '';
+      beforeText = acc;
+    }
   } else {
     range = document.createRange(); range.selectNodeContents(resultEl); range.collapse(false);
+    beforeText = resultEl.innerText;
   }
+  const trimmed = beforeText.replace(/[ \u00A0]+$/, '');
+  const atStart = !trimmed.trim();
+  const capNeeded = atStart || /[.!?]\s*$|\n\s*$/.test(trimmed);
+  const chkL = document.getElementById('chkLower');
+  if(!capNeeded && chkL && chkL.checked && /^[А-ЯЁ]/.test(text) && !/^[А-ЯЁ]{2,}/.test(text.split(/\s+/)[0]) && !/^[—-][ \u00A0]*$/.test(trimmed) && !/[«"']$/.test(trimmed)) text = text[0].toLowerCase() + text.slice(1);
+  if(capNeeded && /^[a-zа-яё]/.test(text)) text = text[0].toUpperCase() + text.slice(1);
+  if(!atStart && !/^[.,!?;:—-]/.test(text) && !/^\s/.test(text) && !/\s$/.test(beforeText) && !/[([{«"']$/.test(trimmed)) text = ' ' + text;
   let node;
   if(conf !== undefined && conf < 0.6 && $('chkConf').checked){
     node = document.createElement('span'); node.className = 'lowconf';
@@ -179,7 +206,7 @@ function initRec(){
     else if(e.error === 'network') status('Ошибка сети распознавания, перезапускаю…');
   };
   rec.onend = function(){
-    if(wantListen){ try{ rec.start(); }catch(e){} }
+    if(wantListen){ setTimeout(function(){ if(wantListen){ try{ rec.start(); }catch(e){} } }, 300); }
     else status('Запись остановлена');
   };
   return true;
@@ -191,6 +218,7 @@ function toggleRecord(){
     if(!rec && !initRec()) return;
     rec.lang = langSel.value;
     wantListen = true; listening = true;
+    resultEl.spellcheck = false;
     try{ rec.start(); }catch(e){}
     $('recBtn').classList.add('recording');
     $('recBtn').textContent = '■ Остановить запись';
@@ -201,6 +229,7 @@ function toggleRecord(){
     rec.stop();
     $('recBtn').classList.remove('recording');
     $('recBtn').textContent = '● Включить запись';
+    resultEl.spellcheck = true;
     stopLevel();
   }
 }
@@ -394,12 +423,20 @@ async function correctText(){
     const corrected = [];
     let fixed = 0;
     for(const chunk of chunks){
-      const resp = await fetch('https://api.languagetool.org/v2/check', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: new URLSearchParams({text: chunk, language: lang})
-      });
-      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const doFetch = () => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(function(){ ctrl.abort(); }, 25000);
+        return fetch('https://api.languagetool.org/v2/check', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: new URLSearchParams({text: chunk, language: lang}),
+          signal: ctrl.signal
+        }).finally(function(){ clearTimeout(timer); });
+      };
+      let resp;
+      try{ resp = await doFetch(); }
+      catch(err){ resp = await doFetch(); }
+      if(!resp.ok) throw new Error('HTTP ' + resp.status + (resp.status === 429 ? ' — сервис перегружен, подождите минуту' : ''));
       const data = await resp.json();
       let s = chunk;
       const matches = data.matches.slice().sort(function(a, b){ return b.offset - a.offset; });
@@ -417,8 +454,97 @@ async function correctText(){
     saveDraft();
     status('Исправлено ошибок: ' + fixed);
   }catch(e){
-    status('Ошибка проверки: ' + e.message);
+    status('Ошибка проверки: ' + e.message + '. Попробуйте ещё раз через минуту.');
   }
+}
+
+const RU_STARTERS = ['ты','он','она','они','оно','мы','вы','я','но','а','да','потом','затем','когда','если','поэтому','однако','хотя','чтобы','также','тоже','так','ведь','что','как','где','куда','почему','зачем','который','которая','это','эти','вот','там','тут','здесь','теперь','сейчас','вдруг','опять','уже','еще','ещё','только','даже','ну','может','наверное','кажется','иногда','часто','сегодня','вчера','завтра'];
+
+function autoPunctText(par){
+  let s = par;
+  s = s.replace(/[ \u00A0]+([.,!?;:»])/g, '$1');
+  s = s.replace(/([.,!?;:«])(?=[^\s\d.,!?;:»«])/g, '$1 ');
+  s = s.replace(/[ \u00A0]{2,}/g, ' ');
+  s = s.trim();
+  if(!s) return {t: par, dots: 0, caps: 0};
+  let dots = 0;
+  if(!/[.!?…]/.test(s)){
+    const words = s.split(' ');
+    const out = [];
+    let count = 0;
+    for(let i = 0; i < words.length; i++){
+      const w = words[i].toLowerCase().replace(/[«»".,]/g, '');
+      if(count >= 4 && RU_STARTERS.indexOf(w) >= 0){
+        out.push('.');
+        dots++;
+        count = 0;
+      }
+      out.push(words[i]);
+      count++;
+    }
+    s = out.join(' ');
+    s = s.replace(/[ \u00A0]+([.,!?;:»])/g, '$1');
+    if(!/[.!?…]$/.test(s)){ s += '.'; dots++; }
+  }
+  let caps = 0;
+  s = s.replace(/(^|[.!?…]\s+)([a-zа-яё])/g, function(m, a, b){ caps++; return a + b.toUpperCase(); });
+  s = s.replace(/(^|[^\wа-яёa-z])я(?=[\s,.;:!?…]|$)/g, function(m, a){ caps++; return a + 'Я'; });
+  return {t: s, dots: dots, caps: caps};
+}
+
+function autoPunct(){
+  const text = resultEl.innerText;
+  if(!text.trim()){ status('Текст пуст'); return; }
+  pushUndo();
+  let dots = 0, caps = 0;
+  const out = text.split('\n').map(function(p){
+    const r = autoPunctText(p);
+    dots += r.dots; caps += r.caps;
+    return r.t;
+  });
+  resultEl.textContent = out.join('\n');
+  saveDraftSoon();
+  updateStats();
+  status('Авто-пунктуация: предложений разбито ' + dots + ', заглавных поставлено ' + caps);
+}
+
+async function smartPunct(){
+  const text = resultEl.innerText;
+  if(!text.trim()){ status('Текст пуст'); return; }
+  status('Нейросеть расставляет пунктуацию…');
+  try{
+    const resp = await fetch('/punctuate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text})
+    });
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    pushUndo();
+    resultEl.textContent = data.text;
+    saveDraft();
+    updateStats();
+    status('Умная пунктуация: готово');
+  }catch(e){
+    status('Умная пунктуация недоступна: нужен запущенный server.py (' + e.message + ')');
+  }
+}
+
+function numberLines(){
+  const text = resultEl.innerText;
+  if(!text.trim()){ status('Текст пуст'); return; }
+  pushUndo();
+  let n = 0;
+  const out = text.split('\n').map(function(l){
+    if(!l.trim()) return l;
+    if(/^\d+[.)]\s/.test(l.trim())) return l;
+    n++;
+    return n + '. ' + l.trim();
+  });
+  resultEl.textContent = out.join('\n');
+  saveDraftSoon();
+  updateStats();
+  status('Пронумеровано абзацев: ' + n);
 }
 
 async function transcribeFile(){
@@ -462,16 +588,18 @@ langSel.addEventListener('change', function(){
   if(listening) rec.stop();
   saveDraft();
 });
-resultEl.addEventListener('input', saveDraft);
+resultEl.addEventListener('input', function(){ saveDraftSoon(); updateStats(); });
+window.addEventListener('beforeunload', saveDraft);
 
 try{
   const d = localStorage.getItem('notepadDraft');
   if(d) resultEl.textContent = d;
   const l = localStorage.getItem('notepadLang');
   if(l) langSel.value = l;
-  const c = localStorage.getItem('notepadChecks');
-  if(c){ try{ const a = JSON.parse(c); if(a.length===3){ $('chkPunct').checked=a[0]; $('chkConf').checked=a[1]; $('chkLower').checked=a[2]; } }catch(e){} }
+  const c = localStorage.getItem('notepadChk');
+  if(c){ const arr = JSON.parse(c); const ids = ['chkPunct','chkConf','chkLower']; for(let i = 0; i < arr.length && i < 3; i++){ const el = document.getElementById(ids[i]); if(el) el.checked = arr[i]; } }
 }catch(e){}
+updateStats();
 
 if(location.protocol === 'file:'){
   $('whisperPanel').innerHTML = '<h3>Расшифровка аудио- и видеофайлов (Whisper)</h3>' +
