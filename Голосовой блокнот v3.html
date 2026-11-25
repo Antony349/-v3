@@ -15,6 +15,7 @@ button:active{background:#dcdcdc}
 #recBtn{padding:8px 16px;font-weight:bold}
 #recBtn.recording{background:#d9534f;color:#fff;border-color:#d9534f}
 .pbtn{min-width:36px}
+#aaBtn.active{border:2px solid #d9534f;background:#ffe9e9;box-shadow:0 0 5px rgba(217,83,79,.7);font-weight:bold}
 #level{vertical-align:middle;background:#eee;border-radius:4px}
 #qual{font-size:13px;color:#666}
 #preview{width:100%;box-sizing:border-box;background:#fafafa;color:#555;font-size:14px}
@@ -54,7 +55,6 @@ legend{font-weight:bold;font-size:14px}
   </label>
   <label><input type="checkbox" id="chkPunct" checked> Заменять слова пунктуации</label>
   <label><input type="checkbox" id="chkConf" checked> Подсвечивать неуверенные слова</label>
-  <label><input type="checkbox" id="chkLower" checked> Убирать заглавную в середине предложения</label>
 </div>
 
 <div class="recbar">
@@ -66,17 +66,17 @@ legend{font-weight:bold;font-size:14px}
 <fieldset><legend>Кнопки пунктуации и правки</legend>
   <div id="punctRow" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>
   <div style="display:flex;flex-wrap:wrap;gap:6px">
-    <button onclick="addCap()">Aa</button>
-    <button onclick="backspace()">←</button>
-    <button onclick="undo()">Отменить</button>
-    <button onclick="cutSel()">Вырезать</button>
-    <button onclick="copyAll()">Скопировать</button>
-    <button onclick="correctText()" style="background:#e8f4e8;font-weight:bold">Исправить ошибки</button>
-    <button onclick="autoPunct()" style="background:#e8f0e8;font-weight:bold">Пунктуация (авто)</button>
-    <button onclick="smartPunct()" style="background:#e8e8f4">Умная пунктуация</button>
-    <button onclick="numberLines()">Нумерация</button>
-    <button onclick="downloadTxt()">Скачать .txt</button>
-    <button onclick="clearAll()">Очистить</button>
+    <button onclick="addCap()" title="Сменить регистр первой буквы слова перед курсором (F2)">Aa</button>
+    <button id="aaBtn" onclick="toggleCaps()" title="Печатать всё заглавными буквами — вкл/выкл">АА</button>
+    <button onclick="backspace()" title="Удалить последний символ перед курсором">←</button>
+    <button onclick="undo()" title="Отменить последнее изменение (Alt+Z)">Отменить</button>
+    <button onclick="cutSel()" title="Вырезать выделенный или весь текст в буфер обмена (Alt+X)">Вырезать</button>
+    <button onclick="pasteFromClipboard()" title="Вставить текст из буфера обмена в позицию курсора (Alt+V)">Вставить</button>
+    <button onclick="correctText()" title="Исправить орфографию через LanguageTool" style="background:#e8f4e8;font-weight:bold">Исправить ошибки</button>
+    <button onclick="autoPunct()" title="Расставить точки и заглавные буквы автоматически" style="background:#e8f0e8;font-weight:bold">Пунктуация (авто)</button>
+    <button onclick="smartPunct()" title="Расставить пунктуацию нейросетью (нужен запущенный server.py)" style="background:#e8e8f4">Умная пунктуация</button>
+    <button onclick="numberLines()" title="Пронумеровать непустые строки">Нумерация</button>
+    <button onclick="downloadTxt()" title="Сохранить текст в файл .txt">Скачать .txt</button>
   </div>
 </fieldset>
 
@@ -100,10 +100,11 @@ legend{font-weight:bold;font-size:14px}
 </section>
 
 <footer>
-  <b>Горячие клавиши</b> (с зажатыми Ctrl и Alt): <kbd>Пробел</kbd> — вкл/выкл запись,
-  <kbd>Z</kbd> — отменить, <kbd>X</kbd> — вырезать в буфер,
-  <kbd>1</kbd>–<kbd>6</kbd> — точка, запятая, ?, !, тире, новая строка.<br>
-  Голосом: «точка», «запятая», «вопросительный знак», «восклицательный знак», «тире», «двоеточие», «новая строка», «абзац».
+  <b>Горячие клавиши</b>: <kbd>Ctrl+Пробел</kbd> — вкл/выкл запись,
+  <kbd>Alt+Z</kbd> — отменить, <kbd>Alt+X</kbd> — вырезать в буфер, <kbd>Alt+C</kbd> — скопировать,
+  <kbd>Alt+V</kbd> — вставить из буфера, <kbd>Alt+1</kbd>–<kbd>Alt+6</kbd> — точка, запятая, ?, !, тире, новая строка,
+  <kbd>F2</kbd> — регистр первой буквы слова.<br>
+  Голосом: «точка», «запятая», «вопросительный знак» или «знак вопроса», «восклицательный знак» или «знак восклицания», «тире», «двоеточие», «новая строка», «абзац».
 </footer>
 
 <script>
@@ -112,13 +113,25 @@ const resultEl = $('result'), previewEl = $('preview'), statusEl = $('status'), 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, listening = false, wantListen = false, quoteOpen = false;
 const undoStack = [];
+let allCapsMode = false, lastVoiceActivity = 0;
 
-const RU_PUNCT = {'точка':'.','запятая':',','вопросительный знак':'?','восклицательный знак':'!','тире':' — ','дефис':'-','двоеточие':':','точка с запятой':';','новая строка':'\n','с новой строки':'\n','абзац':'\n\n'};
+function toggleCaps(){
+  allCapsMode = !allCapsMode;
+  try{ localStorage.setItem('notepadCaps', allCapsMode ? '1' : '0'); }catch(e){}
+  updateCapsBtn();
+  status(allCapsMode ? 'Режим ЗАГЛАВНЫХ БУКВ включён' : 'Режим заглавных букв выключен');
+}
+function updateCapsBtn(){
+  const b = $('aaBtn');
+  if(b) b.classList.toggle('active', allCapsMode);
+}
+
+const RU_PUNCT = {'точка':'.','запятая':',','вопросительный знак':'?','знак вопроса':'?','восклицательный знак':'!','знак восклицания':'!','тире':' — ','дефис':'-','двоеточие':':','точка с запятой':';','новая строка':'\n','с новой строки':'\n','абзац':'\n\n'};
 const EN_PUNCT = {'period':'.','comma':',','question mark':'?','exclamation mark':'!','dash':' — ','new line':'\n','new paragraph':'\n\n'};
 
 function status(msg){ statusEl.textContent = msg; }
 function pushUndo(){ undoStack.push(resultEl.innerHTML); if(undoStack.length > 60) undoStack.shift(); }
-function saveDraft(){ try{ localStorage.setItem('notepadDraft', resultEl.innerText); localStorage.setItem('notepadLang', langSel.value); const cl = document.getElementById('chkLower'); localStorage.setItem('notepadChk', JSON.stringify([document.getElementById('chkPunct').checked, document.getElementById('chkConf').checked, cl ? cl.checked : true])); }catch(e){} }
+function saveDraft(){ try{ localStorage.setItem('notepadDraft', resultEl.innerText); localStorage.setItem('notepadLang', langSel.value); }catch(e){} }
 let saveTimer = null;
 function saveDraftSoon(){ if(saveTimer) return; saveTimer = setTimeout(function(){ saveTimer = null; saveDraft(); }, 1200); }
 function updateStats(){
@@ -143,33 +156,58 @@ function applyVoicePunct(s){
   return s.replace(/[ \u00A0]{2,}/g, ' ');
 }
 
+function textBeforeRange(range){
+  const sc = range.startContainer;
+  if(sc.nodeType === 3) return sc.textContent.slice(0, range.startOffset);
+  let acc = '';
+  for(let i = 0; i < range.startOffset && i < sc.childNodes.length; i++) acc += sc.childNodes[i].textContent || '';
+  return acc;
+}
+
 function insertFinal(text, conf){
   if(!text) return;
   pushUndo();
   const sel = window.getSelection();
-  let range, beforeText = '';
+  let range;
   if(sel.rangeCount && resultEl.contains(sel.anchorNode)){
     range = sel.getRangeAt(0);
     if(!sel.isCollapsed) range.deleteContents();
-    const sc = range.startContainer;
-    if(sc.nodeType === 3){
-      beforeText = sc.textContent.slice(0, range.startOffset);
-    } else {
-      let acc = '';
-      for(let i = 0; i < range.startOffset && i < sc.childNodes.length; i++) acc += sc.childNodes[i].textContent || '';
-      beforeText = acc;
-    }
   } else {
     range = document.createRange(); range.selectNodeContents(resultEl); range.collapse(false);
-    beforeText = resultEl.innerText;
   }
+  const isPunctSign = text.length === 1 && '.,!?;:'.indexOf(text) >= 0;
+  const isBreak = text === '\n' || text === '\n\n';
+  if(isPunctSign || isBreak){
+    // убираем пробелы, оставшиеся перед знаком или переносом строки
+    let node = range.startContainer, off = range.startOffset;
+    if(node.nodeType !== 3){
+      const prev = node.childNodes[off - 1];
+      node = prev ? lastTextNode(prev) : null;
+      off = node ? node.textContent.length : 0;
+    }
+    if(node && off > 0){
+      const t = node.textContent;
+      let m = 0;
+      while(off - m > 0 && /[ \u00A0]/.test(t[off - m - 1])) m++;
+      if(m){ range.setStart(node, off - m); range.setEnd(node, off); range.deleteContents(); range.collapse(true); }
+    }
+  }
+  const beforeText = textBeforeRange(range);
   const trimmed = beforeText.replace(/[ \u00A0]+$/, '');
   const atStart = !trimmed.trim();
-  const capNeeded = atStart || /[.!?]\s*$|\n\s*$/.test(trimmed);
-  const chkL = document.getElementById('chkLower');
-  if(!capNeeded && chkL && chkL.checked && /^[А-ЯЁ]/.test(text) && !/^[А-ЯЁ]{2,}/.test(text.split(/\s+/)[0]) && !/^[—-][ \u00A0]*$/.test(trimmed) && !/[«"']$/.test(trimmed)) text = text[0].toLowerCase() + text.slice(1);
-  if(capNeeded && /^[a-zа-яё]/.test(text)) text = text[0].toUpperCase() + text.slice(1);
-  if(!atStart && !/^[.,!?;:—-]/.test(text) && !/^\s/.test(text) && !/\s$/.test(beforeText) && !/[([{«"']$/.test(trimmed)) text = ' ' + text;
+  if(isPunctSign || isBreak){
+    if(atStart) text = text.replace(/^\n+/, '');
+  } else {
+    if(!atStart && beforeText){
+      const last = beforeText.slice(-1);
+      let needSpace = !/[ \u00A0\n]$/.test(last);
+      if(last === '-' || last === '\u00AB' || last === '(') needSpace = false;
+      if(needSpace && !/^[ \u00A0]/.test(text)) text = ' ' + text;
+    }
+    const capNeeded = atStart || /[.!?]\s*$|\n\s*$/.test(trimmed);
+    if(capNeeded && /^[a-zа-яё]/.test(text)) text = text[0].toUpperCase() + text.slice(1);
+    if(allCapsMode) text = text.toUpperCase();
+  }
   let node;
   if(conf !== undefined && conf < 0.6 && $('chkConf').checked){
     node = document.createElement('span'); node.className = 'lowconf';
@@ -180,7 +218,7 @@ function insertFinal(text, conf){
   range.insertNode(node);
   range.setStartAfter(node); range.collapse(true);
   sel.removeAllRanges(); sel.addRange(range);
-  saveDraft();
+  saveDraftSoon(); updateStats();
 }
 
 function initRec(){
@@ -189,6 +227,7 @@ function initRec(){
   rec.lang = langSel.value;
   rec.continuous = true; rec.interimResults = true;
   rec.onresult = function(e){
+    lastVoiceActivity = Date.now();
     let interim = '';
     for(let i = e.resultIndex; i < e.results.length; i++){
       const r = e.results[i];
@@ -280,6 +319,20 @@ function drawLevelIdle(){
   $('qual').textContent = '';
 }
 
+// Сторож: если распознавание «зависло» — фраза давно не двигается в предпросмотре,
+// переносим её в текст и перезапускаем распознавание
+setInterval(function(){
+  if(!listening) return;
+  if(previewEl.value.trim() && Date.now() - lastVoiceActivity > 6000){
+    let stuck = previewEl.value.trim();
+    previewEl.value = '';
+    if($('chkPunct').checked) stuck = applyVoicePunct(stuck);
+    insertFinal(stuck, undefined);
+    try{ rec.stop(); }catch(e){}
+    status('Фраза перенесена в текст, распознавание перезапущено');
+  }
+}, 2000);
+
 const PUNCT = [
   ['⏎', '\n', 'Новая строка'], ['«»', '"', 'Кавычки (чередуются)'], [' — ', ' — ', 'Тире'],
   ['-', '-', 'Дефис'], [':', ':', 'Двоеточие'], [';', ';', 'Точка с запятой'],
@@ -362,35 +415,45 @@ function fallbackCopy(text){
   document.body.removeChild(ta);
 }
 
-function copyAll(){ copyToClipboard(resultEl.innerText); status('Текст скопирован'); }
+function cleanClipText(s){ return s.replace(/\r\n?/g, '\n').replace(/\n+$/, ''); }
+
+function copyAll(){ copyToClipboard(cleanClipText(resultEl.innerText)); status('Текст скопирован'); }
+
+async function pasteFromClipboard(){
+  try{
+    const t = await navigator.clipboard.readText();
+    if(t){
+      insertFinal(t.replace(/\r\n?/g, '\n'), undefined);
+      resultEl.focus();
+      status('Вставлено из буфера');
+    } else status('Буфер обмена пуст');
+  }catch(e){ status('Браузер не дал доступ к буферу — используйте Ctrl+V'); }
+}
 
 function cutSel(){
   pushUndo();
   const sel = window.getSelection();
   if(sel.rangeCount && resultEl.contains(sel.anchorNode) && !sel.isCollapsed){
-    const txt = sel.toString();
-    sel.getRangeAt(0).deleteContents();
+    const r = sel.getRangeAt(0);
+    const tmp = document.createElement('div');
+    tmp.style.position = 'absolute'; tmp.style.left = '-9999px'; tmp.style.whiteSpace = 'pre-wrap';
+    tmp.appendChild(r.cloneContents());
+    document.body.appendChild(tmp);
+    const txt = cleanClipText(tmp.innerText);
+    document.body.removeChild(tmp);
+    r.deleteContents();
     copyToClipboard(txt);
     status('Вырезано: ' + txt.length + ' симв.');
   } else {
-    const txt = resultEl.innerText;
-    copyToClipboard(txt);
+    copyToClipboard(cleanClipText(resultEl.innerText));
     resultEl.textContent = '';
     status('Весь текст вырезан в буфер');
   }
   saveDraft();
 }
 
-function clearAll(){
-  pushUndo();
-  resultEl.textContent = '';
-  previewEl.value = '';
-  saveDraft();
-  status('Поле очищено (можно вернуть кнопкой «Отменить»)');
-}
-
 function downloadTxt(){
-  const text = resultEl.innerText;
+  const text = cleanClipText(resultEl.innerText);
   if(!text.trim()){ status('Текст пуст'); return; }
   const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
   const a = document.createElement('a');
@@ -572,16 +635,28 @@ async function transcribeFile(){
 }
 
 document.addEventListener('keydown', function(e){
-  if(e.ctrlKey && e.altKey){
-    if(e.code === 'Space'){ e.preventDefault(); toggleRecord(); }
-    else if(e.code === 'KeyZ'){ e.preventDefault(); undo(); }
+  if(e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'Space'){ e.preventDefault(); toggleRecord(); return; }
+  if(e.altKey && !e.ctrlKey){
+    if(e.code === 'KeyZ'){ e.preventDefault(); undo(); }
     else if(e.code === 'KeyX'){ e.preventDefault(); cutSel(); }
-    else if(e.key >= '1' && e.key <= '6'){
+    else if(e.code === 'KeyC'){ e.preventDefault(); copyAll(); }
+    else if(e.code === 'KeyV'){ e.preventDefault(); pasteFromClipboard(); }
+    else if(/^Digit[1-6]$/.test(e.code) || /^Numpad[1-6]$/.test(e.code)){
       e.preventDefault();
-      insertFinal(['.', ',', '?', '!', ' — ', '\n'][+e.key - 1], 1);
+      insertFinal(['.', ',', '?', '!', ' — ', '\n'][+e.code.slice(-1) - 1], 1);
     }
   }
+  if(e.code === 'F2' && !e.ctrlKey && !e.altKey){ e.preventDefault(); addCap(); }
 });
+
+function saveChecks(){
+  try{
+    localStorage.setItem('chkPunct', $('chkPunct').checked ? '1' : '0');
+    localStorage.setItem('chkConf', $('chkConf').checked ? '1' : '0');
+  }catch(e){}
+}
+$('chkPunct').addEventListener('change', saveChecks);
+$('chkConf').addEventListener('change', saveChecks);
 
 langSel.addEventListener('change', function(){
   if(rec) rec.lang = langSel.value;
@@ -589,15 +664,24 @@ langSel.addEventListener('change', function(){
   saveDraft();
 });
 resultEl.addEventListener('input', function(){ saveDraftSoon(); updateStats(); });
+resultEl.addEventListener('paste', function(e){
+  const t = e.clipboardData ? e.clipboardData.getData('text/plain') : null;
+  if(t === null || t === '') return;
+  e.preventDefault();
+  document.execCommand('insertText', false, t.replace(/\r\n?/g, '\n'));
+});
 window.addEventListener('beforeunload', saveDraft);
 
 try{
   const d = localStorage.getItem('notepadDraft');
-  if(d) resultEl.textContent = d;
+  if(d) resultEl.textContent = d.replace(/\n+$/, '');
   const l = localStorage.getItem('notepadLang');
   if(l) langSel.value = l;
-  const c = localStorage.getItem('notepadChk');
-  if(c){ const arr = JSON.parse(c); const ids = ['chkPunct','chkConf','chkLower']; for(let i = 0; i < arr.length && i < 3; i++){ const el = document.getElementById(ids[i]); if(el) el.checked = arr[i]; } }
+  const p = localStorage.getItem('chkPunct');
+  if(p !== null) $('chkPunct').checked = p === '1';
+  const c = localStorage.getItem('chkConf');
+  if(c !== null) $('chkConf').checked = c === '1';
+  if(localStorage.getItem('notepadCaps') === '1'){ allCapsMode = true; updateCapsBtn(); }
 }catch(e){}
 updateStats();
 
